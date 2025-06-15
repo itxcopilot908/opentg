@@ -181,7 +181,7 @@ async def gchat(client: Client, message: Message):
             client.message_timers[user_id].cancel()
 
         async def process_combined_messages():
-            await asyncio.sleep(8)
+            await asyncio.sleep(13)
             buffered_messages = client.message_buffer.pop(user_id, [])
             client.message_timers[user_id] = None
 
