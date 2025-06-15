@@ -181,7 +181,7 @@ async def gchat(client: Client, message: Message):
             client.message_timers[user_id].cancel()
 
         async def process_combined_messages():
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)
             buffered_messages = client.message_buffer.pop(user_id, [])
             client.message_timers[user_id] = None
 
@@ -191,7 +191,7 @@ async def gchat(client: Client, message: Message):
             combined_message = " ".join(buffered_messages)
             chat_history = get_chat_history(user_id, combined_message, user_name)
 
-            await asyncio.sleep(random.choice([3, 5, 7]))
+
             await send_typing_action(client, message.chat.id, combined_message)
 
             gemini_keys = db.get(collection, "gemini_keys") or [gemini_key]
