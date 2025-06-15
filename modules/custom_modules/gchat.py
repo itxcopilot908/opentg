@@ -108,8 +108,13 @@ async def upload_file_to_gemini(file_path, file_type):
     return uploaded_file
 
 async def send_typing_action(client, chat_id, user_message):
+    # Realistic: average 4-6 chars/sec + small randomness, min 2s, max 20s
+    chars_per_second = random.uniform(4, 6)  # simulate human variation
+    base_delay = len(user_message) / chars_per_second
+    jitter = random.uniform(-0.5, 1.5)  # add -0.5~1.5s for thinking
+    total_delay = max(2, min(base_delay + jitter, 20))  # clamp 2–20s
     await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
-    await asyncio.sleep(min(len(user_message) / 10, 5))
+    await asyncio.sleep(total_delay)
 
 async def handle_voice_message(client, chat_id, bot_response):
     if bot_response.startswith(".el"):
@@ -190,7 +195,6 @@ async def gchat(client: Client, message: Message):
 
             combined_message = " ".join(buffered_messages)
             chat_history = get_chat_history(user_id, combined_message, user_name)
-
 
             await send_typing_action(client, message.chat.id, combined_message)
 
