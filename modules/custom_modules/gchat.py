@@ -181,9 +181,7 @@ async def gchat(client: Client, message: Message):
             client.message_timers[user_id].cancel()
 
         async def process_combined_messages():
-            # Instead of 8s debounce + 3/5/7s artificial delay, do all in debounce
-            extra_delay = random.choice([3, 5, 7])
-            await asyncio.sleep(8 + extra_delay)
+            await asyncio.sleep(8)
             buffered_messages = client.message_buffer.pop(user_id, [])
             client.message_timers[user_id] = None
 
