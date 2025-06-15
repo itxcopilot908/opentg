@@ -107,9 +107,18 @@ async def upload_file_to_gemini(file_path, file_type):
         raise ValueError(f"{file_type.capitalize()} failed to process.")
     return uploaded_file
 
-async def send_typing_action(client, chat_id, user_message):
-    await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
-    await asyncio.sleep(min(len(user_message) / 10, 5))
+async def send_typing_action(client, chat_id, text):
+    chars_per_second = random.uniform(4, 6)
+    base_delay = len(text) / chars_per_second
+    jitter = random.uniform(-0.5, 1.5)
+    total_delay = max(2, min(base_delay + jitter, 20))
+    elapsed = 0
+    interval = 4
+    while elapsed < total_delay:
+        await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
+        sleep_time = min(interval, total_delay - elapsed)
+        await asyncio.sleep(sleep_time)
+        elapsed += sleep_time
 
 async def handle_voice_message(client, chat_id, bot_response):
     if bot_response.startswith(".el"):
@@ -191,9 +200,6 @@ async def gchat(client: Client, message: Message):
             combined_message = " ".join(buffered_messages)
             chat_history = get_chat_history(user_id, combined_message, user_name)
 
-
-            await send_typing_action(client, message.chat.id, combined_message)
-
             gemini_keys = db.get(collection, "gemini_keys") or [gemini_key]
             current_key_index = db.get(collection, "current_key_index") or 0
             retries = len(gemini_keys) * 2
@@ -215,6 +221,7 @@ async def gchat(client: Client, message: Message):
                     if await handle_voice_message(client, message.chat.id, bot_response):
                         return
 
+                    await send_typing_action(client, message.chat.id, bot_response)
                     return await message.reply_text(bot_response)
                 except Exception as e:
                     if "429" in str(e) or "invalid" in str(e).lower():
@@ -277,6 +284,7 @@ async def handle_files(client: Client, message: Message):
                     if await handle_voice_message(client, message.chat.id, response):
                         return
 
+                    await send_typing_action(client, message.chat.id, response)
                     await message.reply(response, reply_to_message_id=message.id)
 
                 client.image_timers[user_id] = asyncio.create_task(process_images())
@@ -302,6 +310,7 @@ async def handle_files(client: Client, message: Message):
             if await handle_voice_message(client, message.chat.id, response):
                 return
 
+            await send_typing_action(client, message.chat.id, response)
             return await message.reply(response, reply_to_message_id=message.id)
 
     except Exception as e:
