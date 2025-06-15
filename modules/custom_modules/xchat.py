@@ -113,7 +113,7 @@ async def send_typing_action(client, chat_id, text):
     jitter = random.uniform(-0.5, 1.5)
     total_delay = max(2, min(base_delay + jitter, 20))
     elapsed = 0
-    interval = 4  # Telegram typing lasts ~5s per call, so refresh every 4s
+    interval = 4
     while elapsed < total_delay:
         await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
         sleep_time = min(interval, total_delay - elapsed)
