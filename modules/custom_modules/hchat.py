@@ -38,6 +38,13 @@ la_timezone = pytz.timezone("America/Los_Angeles")
 
 ROLES_URL = "https://gist.githubusercontent.com/iTahseen/00890d65192ca3bd9b2a62eb034b96ab/raw/roles.json"
 
+# === GLOBAL VOICE GENERATION SWITCH ===
+voice_generation_enabled = db.get(collection, "voice_generation_enabled")
+if voice_generation_enabled is None:
+    voice_generation_enabled = True
+    db.set(collection, "voice_generation_enabled", True)
+# ======================================
+
 async def fetch_roles():
     try:
         response = requests.get(ROLES_URL, timeout=5)
@@ -120,7 +127,16 @@ async def send_typing_action(client, chat_id, text):
         await asyncio.sleep(sleep_time)
         elapsed += sleep_time
 
+# === MODIFIED: check global voice_generation_enabled ===
 async def handle_voice_message(client, chat_id, bot_response):
+    global voice_generation_enabled
+    if not voice_generation_enabled:
+        # Voice is globally disabled; send as text, skip audio
+        if bot_response.startswith(".el"):
+            bot_response = bot_response[3:].strip()
+        await client.send_message(chat_id, bot_response)
+        return True
+
     if bot_response.startswith(".el"):
         try:
             audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
@@ -509,6 +525,20 @@ async def set_gemini_key(client: Client, message: Message):
     except Exception as e:
         await client.send_message("me", f"An error occurred in the `setgkey` command:\n\n{str(e)}")
 
+# === GLOBAL VOICE GENERATION TOGGLE COMMAND ===
+@Client.on_message(filters.command("gvoice", prefix) & filters.me)
+async def gvoice_toggle(client: Client, message: Message):
+    global voice_generation_enabled
+    try:
+        # Toggle the value
+        voice_generation_enabled = not voice_generation_enabled
+        db.set(collection, "voice_generation_enabled", voice_generation_enabled)
+        status = "ENABLED" if voice_generation_enabled else "DISABLED"
+        await message.edit_text(f"Voice generation is now globally <b>{status}</b>.")
+        await message.delete()
+    except Exception as e:
+        await client.send_message("me", f"An error occurred in the `gvoice` toggle command:\n\n{str(e)}")
+
 modules_help["gchat"] = {
     "gchat on [user_id]": "Enable gchat for the user.",
     "gchat off [user_id]": "Disable gchat for the user.",
@@ -521,5 +551,6 @@ modules_help["gchat"] = {
     "setgkey add <key>": "Add a Gemini API key.",
     "setgkey set <index>": "Set the Gemini API key.",
     "setgkey del <index>": "Delete a Gemini API key.",
-    "setgkey": "Show all Gemini API keys."
+    "setgkey": "Show all Gemini API keys.",
+    "gvoice": "Globally toggle voice reply for everyone."
 }
