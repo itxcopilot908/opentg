@@ -43,8 +43,7 @@ if voice_generation_enabled is None:
     voice_generation_enabled = True
     db.set(collection, "voice_generation_enabled", True)
 
-# Specify your group/channel ID here (e.g. -1001234567890 for supergroups/channels)
-BOT_PIC_GROUP_ID = -1001234567890  # <-- SET YOUR GROUP/CHANNEL ID HERE
+BOT_PIC_GROUP_ID = -1001234567890
 
 async def fetch_roles():
     try:
