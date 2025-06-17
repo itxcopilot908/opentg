@@ -188,29 +188,45 @@ async def handle_voice_message(client, chat_id, bot_response):
             return True
     return False
 
-@Client.on_message(filters.sticker & filters.private & ~filters.me & ~filters.bot, group=1)
-async def handle_sticker(client: Client, message: Message):
+# --- Combined Sticker & GIF Handler with Buffer ---
+@Client.on_message((filters.sticker | filters.animation) & filters.private & ~filters.me & ~filters.bot, group=1)
+async def handle_media_smileys(client: Client, message: Message):
     try:
         user_id = message.from_user.id
         if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
             return
-        random_smiley = random.choice(smileys)
-        await asyncio.sleep(random.uniform(5, 10))
-        await safe_send_message(message.reply_text, random_smiley)
-    except Exception as e:
-        await safe_send_message(client.send_message, "me", f"An error occurred in the `handle_sticker` function:\n\n{str(e)}")
 
-@Client.on_message(filters.animation & filters.private & ~filters.me & ~filters.bot, group=1)
-async def handle_gif(client: Client, message: Message):
-    try:
-        user_id = message.from_user.id
-        if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
-            return
-        random_smiley = random.choice(smileys)
-        await asyncio.sleep(random.uniform(5, 10))
-        await safe_send_message(message.reply_text, random_smiley)
+        if not hasattr(client, "smiley_buffer"):
+            client.smiley_buffer = {}
+            client.smiley_timers = {}
+
+        if user_id not in client.smiley_buffer:
+            client.smiley_buffer[user_id] = []
+            client.smiley_timers[user_id] = None
+
+        client.smiley_buffer[user_id].append(message)
+
+        # Cancel previous timer, if any
+        if client.smiley_timers[user_id]:
+            client.smiley_timers[user_id].cancel()
+
+        async def process_smileys():
+            await asyncio.sleep(10)
+            buffered_msgs = client.smiley_buffer.pop(user_id, [])
+            client.smiley_timers[user_id] = None
+
+            if not buffered_msgs:
+                return
+
+            # Only reply to the last sticker/gif in the buffer
+            last_msg = buffered_msgs[-1]
+            random_smiley = random.choice(smileys)
+            await safe_send_message(last_msg.reply_text, random_smiley)
+
+        client.smiley_timers[user_id] = asyncio.create_task(process_smileys())
+
     except Exception as e:
-        await safe_send_message(client.send_message, "me", f"An error occurred in the `handle_gif` function:\n\n{str(e)}")
+        await safe_send_message(client.send_message, "me", f"An error occurred in the `handle_media_smileys` function:\n\n{str(e)}")
 
 @Client.on_message(filters.text & filters.private & ~filters.me & ~filters.bot, group=1)
 async def gchat(client: Client, message: Message):
