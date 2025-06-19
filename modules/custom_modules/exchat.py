@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+from collections import defaultdict
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 from utils.scripts import import_library
@@ -15,7 +16,7 @@ import requests
 
 genai = import_library("google.generativeai", "google-generativeai")
 safety_settings = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in [
-    "HARM_CATEGORY_DANGEROUS_CONTENT", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", 
+    "HARM_CATEGORY_DANGEROUS_CONTENT", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
     "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_UNSPECIFIED"]]
 
 generation_config = {
@@ -36,6 +37,13 @@ smileys = ["-.-", "):", ":)", "*.*", ")*"]
 la_timezone = pytz.timezone("America/Los_Angeles")
 
 ROLES_URL = "https://gist.githubusercontent.com/iTahseen/00890d65192ca3bd9b2a62eb034b96ab/raw/roles.json"
+
+voice_generation_enabled = db.get(collection, "voice_generation_enabled")
+if voice_generation_enabled is None:
+    voice_generation_enabled = True
+    db.set(collection, "voice_generation_enabled", True)
+
+BOT_PIC_GROUP_ID = -1001234567890
 
 async def fetch_roles():
     try:
@@ -106,17 +114,60 @@ async def upload_file_to_gemini(file_path, file_type):
         raise ValueError(f"{file_type.capitalize()} failed to process.")
     return uploaded_file
 
-async def send_typing_action(client, chat_id, user_message):
-    await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
-    await asyncio.sleep(min(len(user_message) / 10, 5))
+async def send_typing_action(client, chat_id, text):
+    chars_per_second = random.uniform(4, 6)
+    base_delay = len(text) / chars_per_second
+    jitter = random.uniform(-0.5, 1.5)
+    total_delay = max(2, min(base_delay + jitter, 20))
+    elapsed = 0
+    interval = 4
+    while elapsed < total_delay:
+        await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
+        sleep_time = min(interval, total_delay - elapsed)
+        await asyncio.sleep(sleep_time)
+        elapsed += sleep_time
+
+async def handle_gpic_message(client, chat_id, bot_response):
+    if bot_response.startswith(".gpic"):
+        parts = bot_response.split(maxsplit=2)
+        n = 1
+        caption = ""
+        if len(parts) >= 2 and parts[1].isdigit():
+            n = int(parts[1])
+        if len(parts) == 3:
+            caption = parts[2]
+        photos = []
+        async for msg in client.get_chat_history(BOT_PIC_GROUP_ID, limit=200):
+            if msg.photo:
+                photos.append(msg.photo.file_id)
+        if not photos:
+            await client.send_message(chat_id, "No bot pictures available in the group/channel.")
+            return True
+        selected = random.sample(photos, min(n, len(photos)))
+        if len(selected) > 1:
+            from pyrogram.types import InputMediaPhoto
+            media = [InputMediaPhoto(pic, caption=caption if i == 0 else "") for i, pic in enumerate(selected)]
+            await client.send_media_group(chat_id, media)
+        else:
+            await client.send_photo(chat_id, selected[0], caption=caption)
+        return True
+    return False
 
 async def handle_voice_message(client, chat_id, bot_response):
+    global voice_generation_enabled
+    if not voice_generation_enabled:
+        if bot_response.startswith(".el"):
+            bot_response = bot_response[3:].strip()
+        await client.send_message(chat_id, bot_response)
+        return True
+
     if bot_response.startswith(".el"):
         try:
             audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
             if audio_path:
                 await client.send_voice(chat_id=chat_id, voice=audio_path)
-                os.remove(audio_path)
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
                 return True
         except Exception:
             bot_response = bot_response[3:].strip()
@@ -179,7 +230,7 @@ async def gchat(client: Client, message: Message):
             client.message_timers[user_id].cancel()
 
         async def process_combined_messages():
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)
             buffered_messages = client.message_buffer.pop(user_id, [])
             client.message_timers[user_id] = None
 
@@ -188,9 +239,6 @@ async def gchat(client: Client, message: Message):
 
             combined_message = " ".join(buffered_messages)
             chat_history = get_chat_history(user_id, combined_message, user_name)
-
-            await asyncio.sleep(random.choice([3, 5, 7]))
-            await send_typing_action(client, message.chat.id, combined_message)
 
             gemini_keys = db.get(collection, "gemini_keys") or [gemini_key]
             current_key_index = db.get(collection, "current_key_index") or 0
@@ -207,12 +255,16 @@ async def gchat(client: Client, message: Message):
                     response = model.start_chat().send_message(prompt)
                     bot_response = response.text.strip()
 
+                    if await handle_gpic_message(client, message.chat.id, bot_response):
+                        return
+
                     chat_history.append(bot_response)
                     db.set(collection, f"chat_history.{user_id}", chat_history)
 
                     if await handle_voice_message(client, message.chat.id, bot_response):
                         return
 
+                    await send_typing_action(client, message.chat.id, bot_response)
                     return await message.reply_text(bot_response)
                 except Exception as e:
                     if "429" in str(e) or "invalid" in str(e).lower():
@@ -249,21 +301,17 @@ async def handle_files(client: Client, message: Message):
         chat_history = get_chat_history(user_id, caption, user_name)
         chat_context = "\n".join(chat_history)
 
+        if not hasattr(client, "image_buffer"):
+            client.image_buffer = defaultdict(list)
+            client.image_timers = {}
+
         if message.photo:
-            if not hasattr(client, "image_buffer"):
-                client.image_buffer = {}
-                client.image_timers = {}
-
-            if user_id not in client.image_buffer:
-                client.image_buffer[user_id] = []
-                client.image_timers[user_id] = None
-
             image_path = await client.download_media(message.photo)
             client.image_buffer[user_id].append(image_path)
 
-            if client.image_timers[user_id] is None:
+            if client.image_timers.get(user_id) is None:
                 async def process_images():
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
                     image_paths = client.image_buffer.pop(user_id, [])
                     client.image_timers[user_id] = None
 
@@ -275,10 +323,14 @@ async def handle_files(client: Client, message: Message):
                     prompt = build_prompt(bot_role, chat_history, prompt_text)
                     input_data = [prompt] + sample_images
                     response = await generate_gemini_response(input_data, chat_history, user_id)
-                    
+
+                    if await handle_gpic_message(client, message.chat.id, response):
+                        return
+
                     if await handle_voice_message(client, message.chat.id, response):
                         return
 
+                    await send_typing_action(client, message.chat.id, response)
                     await message.reply(response, reply_to_message_id=message.id)
 
                 client.image_timers[user_id] = asyncio.create_task(process_images())
@@ -301,9 +353,13 @@ async def handle_files(client: Client, message: Message):
             input_data = [prompt, uploaded_file]
             response = await generate_gemini_response(input_data, chat_history, user_id)
 
+            if await handle_gpic_message(client, message.chat.id, response):
+                return
+
             if await handle_voice_message(client, message.chat.id, response):
                 return
 
+            await send_typing_action(client, message.chat.id, response)
             return await message.reply(response, reply_to_message_id=message.id)
 
     except Exception as e:
@@ -311,14 +367,14 @@ async def handle_files(client: Client, message: Message):
     finally:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-            
+
 @Client.on_message(filters.command(["gchat", "gc"], prefix) & filters.me)
 async def gchat_command(client: Client, message: Message):
     try:
         parts = message.text.strip().split()
 
         if len(parts) < 2:
-            await message.edit_text("<b>Usage:</b> gchat `on`, `off`, `del`, or `all` [user_id].")
+            await message.edit_text("<b>Usage:</b> gchat `on`, `off`, `del`, `all`, or `r` [user_id].")
             return
 
         command = parts[1].lower()
@@ -352,8 +408,20 @@ async def gchat_command(client: Client, message: Message):
             db.set(collection, "gchat_for_all", gchat_for_all)
             await message.edit_text(f"{'enabled' if gchat_for_all else 'disabled'} for all.")
 
+        elif command == "r":
+            changed = False
+            if user_id in enabled_users:
+                enabled_users.remove(user_id)
+                db.set(collection, "enabled_users", enabled_users)
+                changed = True
+            if user_id in disabled_users:
+                disabled_users.remove(user_id)
+                db.set(collection, "disabled_users", disabled_users)
+                changed = True
+            await message.edit_text(f"<b>Removed</b> [{user_id}] from enabled/disabled users." if changed else f"<b>User</b> [{user_id}] not in enabled/disabled users.")
+
         else:
-            await message.edit_text("<b>Usage:</b> `gchat on`, `off`, `del`, or `all`.")
+            await message.edit_text("<b>Usage:</b> `gchat on`, `off`, `del`, `all`, or `r`.")
 
         await message.delete()
         
@@ -490,16 +558,31 @@ async def set_gemini_key(client: Client, message: Message):
     except Exception as e:
         await client.send_message("me", f"An error occurred in the `setgkey` command:\n\n{str(e)}")
 
+@Client.on_message(filters.command("gvoice", prefix) & filters.me)
+async def gvoice_toggle(client: Client, message: Message):
+    global voice_generation_enabled
+    try:
+        voice_generation_enabled = not voice_generation_enabled
+        db.set(collection, "voice_generation_enabled", voice_generation_enabled)
+        status = "ENABLED" if voice_generation_enabled else "DISABLED"
+        await message.edit_text(f"Voice generation is now globally <b>{status}</b>.")
+        await message.delete()
+    except Exception as e:
+        await client.send_message("me", f"An error occurred in the `gvoice` toggle command:\n\n{str(e)}")
+
 modules_help["gchat"] = {
     "gchat on [user_id]": "Enable gchat for the user.",
     "gchat off [user_id]": "Disable gchat for the user.",
     "gchat del [user_id]": "Delete chat history for the user.",
     "gchat all": "Toggle gchat for all users.",
+    "gchat r [user_id]": "Remove user from enabled/disabled lists so they can be used with all subcommands.",
     "role [user_id] <custom role>": "Set a custom role for the user.",
     "switch": "Switch gchat modes.",
     "default": "Set a default role for all users.",
     "setgkey add <key>": "Add a Gemini API key.",
     "setgkey set <index>": "Set the Gemini API key.",
     "setgkey del <index>": "Delete a Gemini API key.",
-    "setgkey": "Show all Gemini API keys."
+    "setgkey": "Show all Gemini API keys.",
+    "gvoice": "Globally toggle voice reply for everyone.",
+    ".gpic [n] [caption]": "Send n random bot pictures (from configured group/channel) with optional caption."
 }
