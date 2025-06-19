@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+from collections import defaultdict
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 from utils.scripts import import_library
@@ -116,7 +117,8 @@ async def handle_voice_message(client, chat_id, bot_response):
             audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
             if audio_path:
                 await client.send_voice(chat_id=chat_id, voice=audio_path)
-                os.remove(audio_path)
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
                 return True
         except Exception:
             bot_response = bot_response[3:].strip()
@@ -249,21 +251,17 @@ async def handle_files(client: Client, message: Message):
         chat_history = get_chat_history(user_id, caption, user_name)
         chat_context = "\n".join(chat_history)
 
+        if not hasattr(client, "image_buffer"):
+            client.image_buffer = defaultdict(list)
+            client.image_timers = {}
+
         if message.photo:
-            if not hasattr(client, "image_buffer"):
-                client.image_buffer = {}
-                client.image_timers = {}
-
-            if user_id not in client.image_buffer:
-                client.image_buffer[user_id] = []
-                client.image_timers[user_id] = None
-
             image_path = await client.download_media(message.photo)
             client.image_buffer[user_id].append(image_path)
 
-            if client.image_timers[user_id] is None:
+            if client.image_timers.get(user_id) is None:
                 async def process_images():
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
                     image_paths = client.image_buffer.pop(user_id, [])
                     client.image_timers[user_id] = None
 
