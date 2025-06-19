@@ -15,7 +15,7 @@ import requests
 
 genai = import_library("google.generativeai", "google-generativeai")
 safety_settings = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in [
-    "HARM_CATEGORY_DANGEROUS_CONTENT", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", 
+    "HARM_CATEGORY_DANGEROUS_CONTENT", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
     "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_UNSPECIFIED"]]
 
 generation_config = {
@@ -311,14 +311,14 @@ async def handle_files(client: Client, message: Message):
     finally:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-            
+
 @Client.on_message(filters.command(["gchat", "gc"], prefix) & filters.me)
 async def gchat_command(client: Client, message: Message):
     try:
         parts = message.text.strip().split()
 
         if len(parts) < 2:
-            await message.edit_text("<b>Usage:</b> gchat `on`, `off`, `del`, or `all` [user_id].")
+            await message.edit_text("<b>Usage:</b> gchat `on`, `off`, `del`, `all`, or `r` [user_id].")
             return
 
         command = parts[1].lower()
@@ -352,8 +352,20 @@ async def gchat_command(client: Client, message: Message):
             db.set(collection, "gchat_for_all", gchat_for_all)
             await message.edit_text(f"{'enabled' if gchat_for_all else 'disabled'} for all.")
 
+        elif command == "r":
+            changed = False
+            if user_id in enabled_users:
+                enabled_users.remove(user_id)
+                db.set(collection, "enabled_users", enabled_users)
+                changed = True
+            if user_id in disabled_users:
+                disabled_users.remove(user_id)
+                db.set(collection, "disabled_users", disabled_users)
+                changed = True
+            await message.edit_text(f"<b>Removed</b> [{user_id}] from enabled/disabled users." if changed else f"<b>User</b> [{user_id}] not in enabled/disabled users.")
+
         else:
-            await message.edit_text("<b>Usage:</b> `gchat on`, `off`, `del`, or `all`.")
+            await message.edit_text("<b>Usage:</b> `gchat on`, `off`, `del`, `all`, or `r`.")
 
         await message.delete()
         
@@ -495,6 +507,7 @@ modules_help["gchat"] = {
     "gchat off [user_id]": "Disable gchat for the user.",
     "gchat del [user_id]": "Delete chat history for the user.",
     "gchat all": "Toggle gchat for all users.",
+    "gchat r [user_id]": "Remove user from enabled/disabled lists so they can be used with all subcommands.",
     "role [user_id] <custom role>": "Set a custom role for the user.",
     "switch": "Switch gchat modes.",
     "default": "Set a default role for all users.",
