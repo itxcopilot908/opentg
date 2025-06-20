@@ -584,5 +584,5 @@ modules_help["gchat"] = {
     "setgkey del <index>": "Delete a Gemini API key.",
     "setgkey": "Show all Gemini API keys.",
     "gvoice": "Globally toggle voice reply for everyone.",
-    ".gpic [n] [caption]": "Send n random bot pictures (from configured group/channel) with optional caption."
+    "gpic [n] [caption]": "Send n random bot pictures (from configured group/channel) with optional caption."
 }
