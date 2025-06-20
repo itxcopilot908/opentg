@@ -38,11 +38,6 @@ la_timezone = pytz.timezone("America/Los_Angeles")
 
 ROLES_URL = "https://gist.githubusercontent.com/iTahseen/00890d65192ca3bd9b2a62eb034b96ab/raw/roles.json"
 
-voice_generation_enabled = db.get(collection, "voice_generation_enabled")
-if voice_generation_enabled is None:
-    voice_generation_enabled = True
-    db.set(collection, "voice_generation_enabled", True)
-
 async def fetch_roles():
     try:
         response = requests.get(ROLES_URL, timeout=5)
@@ -112,27 +107,11 @@ async def upload_file_to_gemini(file_path, file_type):
         raise ValueError(f"{file_type.capitalize()} failed to process.")
     return uploaded_file
 
-async def send_typing_action(client, chat_id, text):
-    chars_per_second = random.uniform(4, 6)
-    base_delay = len(text) / chars_per_second
-    jitter = random.uniform(-0.5, 1.5)
-    total_delay = max(2, min(base_delay + jitter, 20))
-    elapsed = 0
-    interval = 4
-    while elapsed < total_delay:
-        await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
-        sleep_time = min(interval, total_delay - elapsed)
-        await asyncio.sleep(sleep_time)
-        elapsed += sleep_time
+async def send_typing_action(client, chat_id, user_message):
+    await client.send_chat_action(chat_id=chat_id, action=enums.ChatAction.TYPING)
+    await asyncio.sleep(min(len(user_message) / 10, 5))
 
 async def handle_voice_message(client, chat_id, bot_response):
-    global voice_generation_enabled
-    if not voice_generation_enabled:
-        if bot_response.startswith(".el"):
-            bot_response = bot_response[3:].strip()
-        await client.send_message(chat_id, bot_response)
-        return True
-
     if bot_response.startswith(".el"):
         try:
             audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
@@ -202,7 +181,7 @@ async def gchat(client: Client, message: Message):
             client.message_timers[user_id].cancel()
 
         async def process_combined_messages():
-            await asyncio.sleep(10)
+            await asyncio.sleep(8)
             buffered_messages = client.message_buffer.pop(user_id, [])
             client.message_timers[user_id] = None
 
@@ -211,6 +190,9 @@ async def gchat(client: Client, message: Message):
 
             combined_message = " ".join(buffered_messages)
             chat_history = get_chat_history(user_id, combined_message, user_name)
+
+            await asyncio.sleep(random.choice([3, 5, 7]))
+            await send_typing_action(client, message.chat.id, combined_message)
 
             gemini_keys = db.get(collection, "gemini_keys") or [gemini_key]
             current_key_index = db.get(collection, "current_key_index") or 0
@@ -233,7 +215,6 @@ async def gchat(client: Client, message: Message):
                     if await handle_voice_message(client, message.chat.id, bot_response):
                         return
 
-                    await send_typing_action(client, message.chat.id, bot_response)
                     return await message.reply_text(bot_response)
                 except Exception as e:
                     if "429" in str(e) or "invalid" in str(e).lower():
@@ -296,7 +277,6 @@ async def handle_files(client: Client, message: Message):
                     if await handle_voice_message(client, message.chat.id, response):
                         return
 
-                    await send_typing_action(client, message.chat.id, response)
                     await message.reply(response, reply_to_message_id=message.id)
 
                 client.image_timers[user_id] = asyncio.create_task(process_images())
@@ -322,7 +302,6 @@ async def handle_files(client: Client, message: Message):
             if await handle_voice_message(client, message.chat.id, response):
                 return
 
-            await send_typing_action(client, message.chat.id, response)
             return await message.reply(response, reply_to_message_id=message.id)
 
     except Exception as e:
@@ -521,18 +500,6 @@ async def set_gemini_key(client: Client, message: Message):
     except Exception as e:
         await client.send_message("me", f"An error occurred in the `setgkey` command:\n\n{str(e)}")
 
-@Client.on_message(filters.command("gvoice", prefix) & filters.me)
-async def gvoice_toggle(client: Client, message: Message):
-    global voice_generation_enabled
-    try:
-        voice_generation_enabled = not voice_generation_enabled
-        db.set(collection, "voice_generation_enabled", voice_generation_enabled)
-        status = "ENABLED" if voice_generation_enabled else "DISABLED"
-        await message.edit_text(f"Voice generation is now globally <b>{status}</b>.")
-        await message.delete()
-    except Exception as e:
-        await client.send_message("me", f"An error occurred in the `gvoice` toggle command:\n\n{str(e)}")
-
 modules_help["gchat"] = {
     "gchat on [user_id]": "Enable gchat for the user.",
     "gchat off [user_id]": "Disable gchat for the user.",
@@ -545,6 +512,5 @@ modules_help["gchat"] = {
     "setgkey add <key>": "Add a Gemini API key.",
     "setgkey set <index>": "Set the Gemini API key.",
     "setgkey del <index>": "Delete a Gemini API key.",
-    "setgkey": "Show all Gemini API keys.",
-    "gvoice": "Globally toggle voice reply for everyone."
+    "setgkey": "Show all Gemini API keys."
 }
