@@ -38,7 +38,25 @@ la_timezone = pytz.timezone("America/Los_Angeles")
 
 ROLES_URL = "https://gist.githubusercontent.com/iTahseen/00890d65192ca3bd9b2a62eb034b96ab/raw/roles.json"
 
-BOT_PIC_GROUP_ID = -1001234567890  # <- set this to your group/channel id
+# gpic feature toggle and group/channel id management
+def get_gpic_enabled():
+    enabled = db.get(collection, "gpic_enabled")
+    if enabled is None:
+        enabled = True
+        db.set(collection, "gpic_enabled", True)
+    return enabled
+
+def set_gpic_enabled(enabled: bool):
+    db.set(collection, "gpic_enabled", enabled)
+
+def get_gpic_group_id():
+    group_id = db.get(collection, "gpic_group_id")
+    if group_id is None:
+        group_id = -1001234567890
+    return group_id
+
+def set_gpic_group_id(group_id: int):
+    db.set(collection, "gpic_group_id", int(group_id))
 
 # ========== Outgoing Reply Queue ==========
 reply_queue = asyncio.Queue()
@@ -79,14 +97,18 @@ def set_voice_generation_enabled(enabled: bool):
 
 # ========== gpic logic (safe & efficient) ==========
 async def fetch_bot_pics(client, max_photos=200):
+    group_id = get_gpic_group_id()
     photos = []
-    async for msg in client.get_chat_history(BOT_PIC_GROUP_ID, limit=max_photos):
+    async for msg in client.get_chat_history(group_id, limit=max_photos):
         if msg.photo:
             photos.append(msg.photo.file_id)
     return photos
 
 async def handle_gpic_message(client, chat_id, bot_response):
     if bot_response.startswith(".gpic"):
+        if not get_gpic_enabled():
+            await send_reply(client.send_message, (chat_id, "The gpic feature is currently disabled."), {}, client)
+            return True
         parts = bot_response.split(maxsplit=2)
         n = 1
         caption = ""
@@ -202,7 +224,6 @@ sticker_gif_buffer = defaultdict(list)
 sticker_gif_timer = {}
 
 async def process_sticker_gif_buffer(client, user_id):
-    """Send ONE smiley reply after a short buffer, regardless of how many stickers/gifs were sent rapidly."""
     try:
         await asyncio.sleep(8)
         msgs = sticker_gif_buffer.pop(user_id, [])
@@ -532,10 +553,44 @@ async def gvoice_toggle(client: Client, message: Message):
         enabled = not get_voice_generation_enabled()
         set_voice_generation_enabled(enabled)
         status = "ENABLED" if enabled else "DISABLED"
-        await send_reply(message.edit_text, (f"Voice generation is now globally <b>{status}</b>."), {}, client)
+        await send_reply(message.edit_text, (f"Voice generation is now globally <b>{status}</b>.",), {}, client)
         await send_reply(message.delete, (), {}, client)
     except Exception as e:
         await send_reply(client.send_message, ("me", f"An error occurred in the `gvoice` toggle command:\n\n{str(e)}"), {}, client)
+
+@Client.on_message(filters.command("gpic", prefix) & filters.me)
+async def gpic_admin(client: Client, message: Message):
+    try:
+        parts = message.text.strip().split(maxsplit=2)
+        if len(parts) < 2:
+            status = "ENABLED" if get_gpic_enabled() else "DISABLED"
+            current_group = get_gpic_group_id()
+            await send_reply(message.edit_text, (
+                f"gpic is currently <b>{status}</b>.\n"
+                f"Current group/channel ID: <code>{current_group}</code>\n"
+                f"Usage:\n"
+                f"- <code>gpic on</code> / <code>gpic off</code>\n"
+                f"- <code>gpic group &lt;group_id&gt;</code>"
+            ), {}, client)
+            return
+        cmd = parts[1].lower()
+        if cmd == "on":
+            set_gpic_enabled(True)
+            await send_reply(message.edit_text, ("gpic feature ENABLED.",), {}, client)
+        elif cmd == "off":
+            set_gpic_enabled(False)
+            await send_reply(message.edit_text, ("gpic feature DISABLED.",), {}, client)
+        elif cmd == "group":
+            if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
+                await send_reply(message.edit_text, ("Usage: gpic group <group_id>",), {}, client)
+                return
+            set_gpic_group_id(int(parts[2]))
+            await send_reply(message.edit_text, (f"gpic group/channel set to <code>{parts[2]}</code>."), {}, client)
+        else:
+            await send_reply(message.edit_text, ("Unknown gpic command."), {}, client)
+        await send_reply(message.delete, (), {}, client)
+    except Exception as e:
+        await send_reply(client.send_message, ("me", f"gpic admin error:\n{e}"), {}, client)
 
 modules_help["gchat"] = {
     "gchat on [user_id]": "Enable gchat for the user.",
@@ -551,5 +606,7 @@ modules_help["gchat"] = {
     "setgkey del <index>": "Delete a Gemini API key.",
     "setgkey": "Show all Gemini API keys.",
     "gvoice": "Globally toggle voice reply for everyone.",
+    "gpic on/off": "Globally enable or disable gpic feature.",
+    "gpic group <group_id>": "Set the group/channel used for .gpic",
     "gpic [n] [caption]": "Send n random bot pictures (from configured group/channel) with optional caption."
 }
