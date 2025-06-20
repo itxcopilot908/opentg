@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import tempfile
 from collections import defaultdict
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
@@ -64,9 +65,12 @@ reply_worker_started = False
 
 async def reply_worker(client):
     while True:
-        reply_func, args, kwargs = await reply_queue.get()
+        # Now the tuple can contain a cleanup callback and its args
+        reply_func, args, kwargs, cleanup = await reply_queue.get()
         try:
             await reply_func(*args, **kwargs)
+            if cleanup:
+                await cleanup()
         except Exception as e:
             try:
                 await client.send_message("me", f"Reply queue error:\n{e}")
@@ -80,9 +84,9 @@ def ensure_reply_worker(client):
         asyncio.create_task(reply_worker(client))
         reply_worker_started = True
 
-async def send_reply(reply_func, args, kwargs, client):
+async def send_reply(reply_func, args, kwargs, client, cleanup=None):
     ensure_reply_worker(client)
-    await reply_queue.put((reply_func, args, kwargs))
+    await reply_queue.put((reply_func, args, kwargs, cleanup))
 
 # ========== gvoice toggle ==========
 def get_voice_generation_enabled():
@@ -207,12 +211,15 @@ async def handle_voice_message(client, chat_id, bot_response):
         return True
     if bot_response.startswith(".el"):
         try:
-            audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
-            if audio_path:
-                await send_reply(client.send_voice, (chat_id,), {"voice": audio_path}, client)
+            # Generate a unique temporary file for each voice (to prevent conflicts)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmpfile:
+                audio_path = tmpfile.name
+            await generate_elevenlabs_audio(text=bot_response[3:], output_path=audio_path)
+            async def cleanup():
                 if os.path.exists(audio_path):
                     os.remove(audio_path)
-                return True
+            await send_reply(client.send_voice, (chat_id,), {"voice": audio_path}, client, cleanup=cleanup)
+            return True
         except Exception:
             bot_response = bot_response[3:].strip()
             await send_reply(client.send_message, (chat_id, bot_response), {}, client)
