@@ -197,29 +197,36 @@ async def handle_voice_message(client, chat_id, bot_response):
             return True
     return False
 
-@Client.on_message(filters.sticker & filters.private & ~filters.me & ~filters.bot, group=1)
-async def handle_sticker(client: Client, message: Message):
-    try:
-        user_id = message.from_user.id
-        if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
-            return
-        random_smiley = random.choice(smileys)
-        await asyncio.sleep(random.uniform(5, 10))
-        await send_reply(message.reply_text, (random_smiley,), {}, client)
-    except Exception as e:
-        await send_reply(client.send_message, ("me", f"An error occurred in the `handle_sticker` function:\n\n{str(e)}"), {}, client)
+# ========== STICKER/GIF BUFFERED HANDLER ==========
+sticker_gif_buffer = defaultdict(list)
+sticker_gif_timer = {}
 
-@Client.on_message(filters.animation & filters.private & ~filters.me & ~filters.bot, group=1)
-async def handle_gif(client: Client, message: Message):
+async def process_sticker_gif_buffer(client, user_id):
+    """Send ONE smiley reply after a short buffer, regardless of how many stickers/gifs were sent rapidly."""
     try:
-        user_id = message.from_user.id
-        if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
+        await asyncio.sleep(8)
+        msgs = sticker_gif_buffer.pop(user_id, [])
+        sticker_gif_timer.pop(user_id, None)
+        if not msgs:
             return
+        last_msg = msgs[-1]
         random_smiley = random.choice(smileys)
         await asyncio.sleep(random.uniform(5, 10))
-        await send_reply(message.reply_text, (random_smiley,), {}, client)
+        await send_reply(last_msg.reply_text, (random_smiley,), {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ("me", f"An error occurred in the `handle_gif` function:\n\n{str(e)}"), {}, client)
+        await send_reply(client.send_message, ("me", f"An error occurred in the sticker/gif buffer:\n\n{str(e)}"), {}, client)
+
+@Client.on_message(
+    (filters.sticker | filters.animation) & filters.private & ~filters.me & ~filters.bot, group=1
+)
+async def handle_sticker_gif_buffered(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
+        return
+    sticker_gif_buffer[user_id].append(message)
+    if sticker_gif_timer.get(user_id):
+        sticker_gif_timer[user_id].cancel()
+    sticker_gif_timer[user_id] = asyncio.create_task(process_sticker_gif_buffer(client, user_id))
 
 @Client.on_message(filters.text & filters.private & ~filters.me & ~filters.bot, group=1)
 async def gchat(client: Client, message: Message):
